@@ -76,8 +76,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ghcr.io/${{ vars.OWNER_LC }}/my-app:latest
+            ghcr.io/${{ vars.OWNER_LC }}/my-app:${{ github.sha }}
 
   # ── Job 5: Deploy ────────────────────────────────────────
   deploy:
