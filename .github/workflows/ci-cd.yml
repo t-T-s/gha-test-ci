@@ -1,0 +1,106 @@
+name: CI/CD Pipeline
+
+# ── Trigger ───────────────────────────────────────────────
+# Runs on every push to main, and on every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ── Shared env vars ───────────────────────────────────────
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/my-app
+
+jobs:
+
+  # ── Job 1: Lint ─────────────────────────────────────────
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4          # pulls your code onto the runner
+
+      - uses: actions/setup-python@v5      # installs Python
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install flake8
+
+      - name: Run flake8
+        run: flake8 src/ tests/
+
+  # ── Job 2: Test ─────────────────────────────────────────
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    needs: lint                            # only runs if lint passes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest tests/ -v
+
+  # ── Job 3 & 4: Build + Push Docker image ────────────────
+  build-and-push:
+    name: Build & Push Docker image
+    runs-on: ubuntu-latest
+    needs: test                            # only runs if tests pass
+    # Only push on real commits to main, not on PRs
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write                      # needed to push to ghcr.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # auto-provided, no setup needed
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  # ── Job 5: Deploy ────────────────────────────────────────
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: SSH into server and redeploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host:     ${{ secrets.SSH_HOST }}      # your server IP/domain
+          username: ${{ secrets.SSH_USER }}      # e.g. ubuntu
+          key:      ${{ secrets.SSH_KEY }}       # your private SSH key
+          script: |
+            docker pull ${{ env.IMAGE_NAME }}:latest
+            docker stop my-app || true
+            docker rm   my-app || true
+            docker run -d \
+              --name my-app \
+              --restart always \
+              -p 3000:3000 \
+              -e FLASK_ENV=production \
+              ${{ env.IMAGE_NAME }}:latest
+            echo "✅ Deployed successfully"
